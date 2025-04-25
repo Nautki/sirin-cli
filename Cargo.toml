@@ -1,0 +1,8 @@
+[package]
+name = "sirin-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serialport = "4.7.1"
+sirin-shared = { version = "0.1.0", path = "../sirin/sirin-shared" }
