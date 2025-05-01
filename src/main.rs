@@ -1,43 +1,31 @@
+use std::thread::sleep;
 use std::time::Duration;
 use std::io::Read;
 
-use serialport::available_ports;
-use sirin_shared::song::{FromSong, OutPacket, MAX_OUT_PACKET_SIZE};
+use sirin_shared::packet::{OutPacket, MAX_OUT_PACKET_SIZE};
+use sirin_shared::song::FromSong;
+use sirin_shared::{USB_PID, USB_VID};
 
 fn main() {
-    //let available_ports = available_ports().unwrap();
-    //for available_port in available_ports {
-    //    print!("{}", available_port.port_name);
-    //s}
-    let port_name = "/dev/cu.usbmodem21301"; 
-    let baud_rate = 115200; 
-
-    let mut port = serialport::new(port_name, baud_rate)
-        .timeout(Duration::from_millis(2000))
-        .open()
-        .expect("Failed to open serial port");
-    let mut buffer = [0u8; MAX_OUT_PACKET_SIZE * 2];
-
     loop {
-        let mut i = 0;
-
-        loop {
-            match port.read(&mut buffer[i..]) {
-                Ok(n) => {
-                    i += n;
+        sleep(Duration::new(0, 1_000_000));
+        println!("---");
+        for device in rusb::devices().unwrap().iter() {
+            let device_desc = device.device_descriptor().unwrap();
     
-                    if n == 32 {
-                        continue;
-                    }
-    
-                    let res = OutPacket::from_song(&buffer[0..i]);
-                    println!("{:?}", &buffer[0..i]);
-                    println!("{:?}", res);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                }
+            println!("Bus {:03} Device {:03} ID {:04x}:{:04x}",
+                device.bus_number(),
+                device.address(),
+                device_desc.vendor_id(),
+                device_desc.product_id());
+            
+            if device_desc.vendor_id() == USB_VID && device_desc.product_id() == USB_PID {
+                println!("Found Sirin!");
+                let mut dev = device.open().unwrap();
+                let mut buf = [0u8; MAX_OUT_PACKET_SIZE];
+                dev.claim_interface(0).unwrap();
+                let len = dev.read_bulk(0, &mut buf, Duration::from_secs(1)).unwrap();
+                println!("{:?}", OutPacket::from_song(&buf[0..len]));
             }
         }
     }
