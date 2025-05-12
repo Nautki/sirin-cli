@@ -3,11 +3,14 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::io::Read;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
+use clap_num::maybe_hex;
 use derive_more::{Display, From};
 use rusb::{Device, DeviceHandle, GlobalContext};
-use sirin_shared::packet::{ByteArrayStrError, CallsignBuf, InPacket, NicknameBuf, OutPacket, MAX_OUT_PACKET_SIZE};
+use sirin_shared::mode::SirinMode;
+use sirin_shared::packet::{ByteArrayStrError, InPacket, OutPacket, MAX_OUT_PACKET_SIZE};
+use sirin_shared::config::{CallsignBuf, NicknameBuf, SirinConfig};
 use sirin_shared::song::{FromSong, FromSongError, SongSize, ToSong, ToSongError};
 use sirin_shared::usb::{USB_EP_IN_ADDR, USB_EP_OUT_ADDR, USB_PID, USB_VID};
 use sirin_shared::packet::ByteArrayStr;
@@ -28,11 +31,24 @@ enum Subcommands {
 
         #[arg(long)]
         callsign: Option<String>,
+
+        #[arg(long, value_parser=maybe_hex::<u16>)]
+        id: Option<u16>
+    },
+    #[command(about = "View and set the mode")]
+    Mode {
+        mode: Option<Mode>
     },
     #[command(about = "See the outgoing Sirin packets")]
     Tail,
     #[command(about = "List connected Sirins")]
     Ls
+}
+
+#[derive(ValueEnum, Clone)]
+enum Mode {
+    Standby,
+    Flight
 }
 
 fn main() {
@@ -49,8 +65,8 @@ fn main() {
 
 fn run(args: Args) -> Result<(), Error> {
     match args.command {
-        Subcommands::Config { nickname, callsign } => {
-            let is_changing_config = nickname.is_some() || callsign.is_some();
+        Subcommands::Config { nickname, callsign, id } => {
+            let is_changing_config = nickname.is_some() || callsign.is_some() || id.is_some();
 
             let sirin = SirinDev::connect()?.open()?;
             sirin.write_packet(&InPacket::QueryConfig)?;
@@ -78,12 +94,41 @@ fn run(args: Args) -> Result<(), Error> {
                     config.callsign = CallsignBuf::from_str(&callsign)?;
                 }
 
+                if let Some(id) = id {
+                    config.id = id;
+                }
+
                 println!("New config:");
                 println!("{}", config);
 
                 sirin.write_packet(&InPacket::SetConfig(config))?;
+            }
+        }
+        Subcommands::Mode { mode } => {
+            let sirin = SirinDev::connect()?.open()?;
 
+            if let Some(mode) = mode {
+                let mode = match mode {
+                    Mode::Standby => SirinMode::Standby,
+                    Mode::Flight => SirinMode::Flight
+                };
 
+                sirin.write_packet(&InPacket::SetMode(mode))?;
+
+                println!("Set the mode to {}.", mode)
+            } else {
+                sirin.write_packet(&InPacket::QueryMode)?;
+
+                let mode = loop {
+                    let packet = sirin.read_packet()?;
+                    let OutPacket::Mode(mode) = packet else {
+                        continue;
+                    };
+
+                    break mode;
+                };
+
+                println!("{}", mode);
             }
         }
         Subcommands::Ls => {
@@ -164,19 +209,6 @@ impl SirinDev {
             let device_desc = device.device_descriptor().unwrap();
 
             if device_desc.vendor_id() == USB_VID && device_desc.product_id() == USB_PID {
-                println!("Connected to Sirin:");
-                let handler = device.open()?;
-
-                println!("Bus {:03} Device {:03} ID {:04x}:{:04x} {} {} {}",
-                    device.bus_number(),
-                    device.address(),
-                    device_desc.vendor_id(),
-                    device_desc.product_id(),
-                    handler.read_manufacturer_string_ascii(&device_desc).unwrap_or_default(),
-                    handler.read_product_string_ascii(&device_desc).unwrap_or_default(),
-                    handler.read_serial_number_string_ascii(&device_desc).unwrap_or_default()
-                );
-                
                 return Ok(Self {
                     device
                 })

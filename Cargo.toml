@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
+clap-num = "1.2.0"
 derive_more = { version = "2.0.1", features = ["from", "display"] }
 rusb = "0.9.4"
 sirin-shared = { version = "0.1.0", path = "../sirin/sirin-shared" }
