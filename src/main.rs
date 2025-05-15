@@ -27,6 +27,15 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Subcommands {
+    #[command(about = "List connected Sirins")]
+    Ls,
+    #[command(about = "Erase everything")]
+    Erase,
+    #[command(about = "Reboot Sirin")]
+    Reboot,
+    #[command(about = "See the outgoing Sirin packets")]
+    Tail,
+
     #[command(about = "View and set configuration")]
     Config {
         #[arg(long)]
@@ -38,22 +47,21 @@ enum Subcommands {
         #[arg(long, value_parser=maybe_hex::<u16>)]
         id: Option<u16>
     },
-    #[command(about = "View and set the mode")]
+    #[command(about = "View and set the mode, e.g. flight/standby")]
     Mode {
         mode: Option<Mode>
     },
-    #[command(about = "List flights")]
-    Flights {},
-    #[command(about = "See the outgoing Sirin packets")]
-    Tail,
-    #[command(about = "List connected Sirins")]
+    #[command(subcommand, about = "List and export flights")]
+    Flights(FlightSubcommands)
+}
+
+#[derive(Subcommand)]
+enum FlightSubcommands {
+    #[command(about = "List all saved flights")]
     Ls,
-    #[command(about = "Erase everything")]
-    Erase,
-    #[command(about = "Reboot Sirin")]
-    Reboot,
-    #[command(about = "Get data from flight")]
-    Flight {
+
+    #[command(about = "Export data from a flight")]
+    Export {
         index: u16,
         
         #[arg(long)]
@@ -83,6 +91,35 @@ fn run(args: Args) -> Result<(), Error> {
     let _ = set_time();
 
     match args.command {
+        Subcommands::Ls => {
+            SirinDev::list();
+        }
+        Subcommands::Erase => {
+            let sirin = SirinDev::connect()?.open()?;
+            sirin.send_packet(&InPacket::EraseFlash(MagicU8::<0xA8>))?;
+
+            println!("Erasing. This may take some time.");
+
+            for _ in sirin.receive_packets() {}
+
+            println!("Done. Please unplug and plug back in Sirin.");
+        }
+        Subcommands::Reboot => {
+            let sirin = SirinDev::connect()?.open()?;
+            sirin.send_packet(&InPacket::Reboot)?;
+        }
+        Subcommands::Tail => {
+            let sirin = SirinDev::connect()?.open()?;
+            sirin.send_packet(&InPacket::Tail(true))?;
+            
+            for packet in sirin.receive_packets() {
+                match packet {
+                    Ok(packet) => println!("{:?}", packet),
+                    Err(Error::NoSirin) => return Err(Error::NoSirin),
+                    Err(err) => println!("Error: {}", err)
+                }
+            }
+        }
         Subcommands::Config { nickname, callsign, id } => {
             let is_changing_config = nickname.is_some() || callsign.is_some() || id.is_some();
 
@@ -148,88 +185,63 @@ fn run(args: Args) -> Result<(), Error> {
 
                 println!("{}", mode);
             }
-        },
-        Subcommands::Flights {  } => {
-            let sirin = SirinDev::connect()?.open()?;
-            
-            sirin.send_packet(&InPacket::QueryFlights)?;
+        }
+        Subcommands::Flights(subcommand) => {
+            match subcommand {
+                FlightSubcommands::Ls => {
+                    let sirin = SirinDev::connect()?.open()?;
+                    
+                    sirin.send_packet(&InPacket::QueryFlights)?;
 
-            let mut empty = true;
-            for packet in sirin.receive_packets() {
-                match packet {
-                    Ok(OutPacket::FlightHeader(header)) => {
-                        empty = false;
-                        println!("{:?}", header)
+                    let mut empty = true;
+                    for packet in sirin.receive_packets() {
+                        match packet {
+                            Ok(OutPacket::FlightHeader(header)) => {
+                                empty = false;
+                                println!("{:?}", header)
+                            }
+                            Err(Error::NoSirin) => return Err(Error::NoSirin),
+                            Err(err) => println!("Error: {}", err),
+                            _ => {}
+                        }
                     }
-                    Err(Error::NoSirin) => return Err(Error::NoSirin),
-                    Err(err) => println!("Error: {}", err),
-                    _ => {}
-                }
-            }
 
-            if empty {
-                println!("No flights found.");
-            }
-        }
-        Subcommands::Ls => {
-            SirinDev::list();
-        },
-        Subcommands::Tail => {
-            let sirin = SirinDev::connect()?.open()?;
-            sirin.send_packet(&InPacket::Tail(true))?;
-            
-            for packet in sirin.receive_packets() {
-                match packet {
-                    Ok(packet) => println!("{:?}", packet),
-                    Err(Error::NoSirin) => return Err(Error::NoSirin),
-                    Err(err) => println!("Error: {}", err)
-                }
-            }
-        }
-        Subcommands::Erase => {
-            let sirin = SirinDev::connect()?.open()?;
-            sirin.send_packet(&InPacket::EraseFlash(MagicU8::<0xA8>))?;
-
-            println!("Erasing. This may take some time.");
-
-            for _ in sirin.receive_packets() {}
-
-            println!("Done. Please unplug and plug back in Sirin.");
-        }
-        Subcommands::Reboot => {
-            let sirin = SirinDev::connect()?.open()?;
-            sirin.send_packet(&InPacket::Reboot)?;
-        }
-        Subcommands::Flight { index, csv } => {
-            let sirin = SirinDev::connect()?.open()?;
-            println!("Writing flight data to {}", csv.to_string_lossy());
-            let mut file = File::create(csv)?;
-            file.write_all(b"time,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,accel_x,accel_y,accel_z,altitude\n")?;
-
-            sirin.send_packet(&InPacket::ReadFlight(index))?;
-            for packet in sirin.receive_packets() {
-                if let OutPacket::LogEntry(entry) = packet? {
-                    #[allow(irrefutable_let_patterns)]
-                    if let Log::State(state) = entry.log {
-                        writeln!(
-                            file,
-                            "{},{},{},{},{},{},{},{},{},{},{}",
-                            entry.time,
-                            state.pos.x.value,
-                            state.pos.y.value,
-                            state.pos.z.value,
-                            state.vel.x.value,
-                            state.vel.y.value,
-                            state.vel.z.value,
-                            state.accel.x.value,
-                            state.accel.y.value,
-                            state.accel.z.value,
-                            state.altitude.value
-                        )?;
+                    if empty {
+                        println!("No flights found.");
                     }
-                }
+                },
+                FlightSubcommands::Export { index, csv } => {
+                    let sirin = SirinDev::connect()?.open()?;
+                    println!("Writing flight data to {}", csv.to_string_lossy());
+                    let mut file = File::create(csv)?;
+                    file.write_all(b"time,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,accel_x,accel_y,accel_z,altitude\n")?;
+
+                    sirin.send_packet(&InPacket::ReadFlight(index))?;
+                    for packet in sirin.receive_packets() {
+                        if let OutPacket::LogEntry(entry) = packet? {
+                            #[allow(irrefutable_let_patterns)]
+                            if let Log::State(state) = entry.log {
+                                writeln!(
+                                    file,
+                                    "{},{},{},{},{},{},{},{},{},{},{}",
+                                    entry.time,
+                                    state.pos.x.value,
+                                    state.pos.y.value,
+                                    state.pos.z.value,
+                                    state.vel.x.value,
+                                    state.vel.y.value,
+                                    state.vel.z.value,
+                                    state.accel.x.value,
+                                    state.accel.y.value,
+                                    state.accel.z.value,
+                                    state.altitude.value
+                                )?;
+                            }
+                        }
+                    }
+                    println!("Done.");
+                },
             }
-            println!("Done.");
         }
     }
 
