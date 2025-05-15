@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::io::Write;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -14,6 +14,7 @@ use sirin_shared::packet::{ByteArrayStrError, InPacket, Log, OutPacket, MAX_OUT_
 use sirin_shared::config::{CallsignBuf, NicknameBuf};
 use sirin_shared::song::magic::MagicU8;
 use sirin_shared::song::{FromSong, FromSongError, SongSize, ToSong, ToSongError};
+use sirin_shared::time::AbsoluteTimeReference;
 use sirin_shared::usb::{USB_EP_IN_ADDR, USB_EP_OUT_ADDR, USB_PID, USB_VID};
 use sirin_shared::packet::ByteArrayStr;
 
@@ -79,6 +80,8 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), Error> {
+    let _ = set_time();
+
     match args.command {
         Subcommands::Config { nickname, callsign, id } => {
             let is_changing_config = nickname.is_some() || callsign.is_some() || id.is_some();
@@ -203,15 +206,11 @@ fn run(args: Args) -> Result<(), Error> {
             let mut file = File::create(csv)?;
             file.write_all(b"time,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,accel_x,accel_y,accel_z,altitude\n")?;
 
-
             sirin.send_packet(&InPacket::ReadFlight(index))?;
             for packet in sirin.receive_packets() {
-                println!("Got packet: {:?}", packet);
-
                 if let OutPacket::LogEntry(entry) = packet? {
                     #[allow(irrefutable_let_patterns)]
                     if let Log::State(state) = entry.log {
-                        println!("{:?}", state);
                         writeln!(
                             file,
                             "{},{},{},{},{},{},{},{},{},{},{}",
@@ -230,8 +229,19 @@ fn run(args: Args) -> Result<(), Error> {
                     }
                 }
             }
+            println!("Done.");
         }
     }
+
+    Ok(())
+}
+
+fn set_time() -> Result<(), Error> {
+    let sirin = SirinDev::connect()?.open()?;
+
+    sirin.send_packet(&InPacket::SetTime(AbsoluteTimeReference {
+        ms_since_epoch: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+    }))?;
 
     Ok(())
 }
