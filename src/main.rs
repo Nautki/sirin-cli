@@ -1,13 +1,14 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::io::Write;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 use clap_num::maybe_hex;
 use derive_more::{Display, From};
+use jiff::Zoned;
 use rusb::{Device, DeviceHandle, GlobalContext};
 use sirin_shared::mode::SirinMode;
 use sirin_shared::packet::{ByteArrayStrError, InPacket, Log, OutPacket, MAX_OUT_PACKET_SIZE};
@@ -17,7 +18,6 @@ use sirin_shared::song::{FromSong, FromSongError, SongSize, ToSong, ToSongError}
 use sirin_shared::time::AbsoluteTimeReference;
 use sirin_shared::usb::{USB_EP_IN_ADDR, USB_EP_OUT_ADDR, USB_PID, USB_VID};
 use sirin_shared::packet::ByteArrayStr;
-
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
@@ -197,8 +197,23 @@ fn run(args: Args) -> Result<(), Error> {
                     for packet in sirin.receive_packets() {
                         match packet {
                             Ok(OutPacket::FlightHeader(header)) => {
+                                if empty {
+                                    println!(" ID  Date");
+                                    println!("===========================")
+                                }
+
                                 empty = false;
-                                println!("{:?}", header)
+                                if let Some(time) = header.data.time_reference.0 {
+                                    let time = UNIX_EPOCH + Duration::from_millis(time.ms_since_epoch);
+
+                                    if let Ok(zoned) = Zoned::try_from(time) {
+                                        println!("{:>3}  {}", header.index, zoned.strftime("%A, %B %d, %Y at %I:%M%p %Q"));
+                                    } else {
+                                        println!("{:>3}  Unknown time", header.index);
+                                    }
+                                } else {
+                                    println!("{:>3}  Unknown time", header.index);
+                                }
                             }
                             Err(Error::NoSirin) => return Err(Error::NoSirin),
                             Err(err) => println!("Error: {}", err),
