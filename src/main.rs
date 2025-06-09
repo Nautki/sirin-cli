@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::io::Write;
+use std::io::{stdout, Write};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -11,7 +11,7 @@ use derive_more::{Display, From};
 use jiff::Zoned;
 use rusb::{Device, DeviceHandle, GlobalContext};
 use sirin_shared::mode::SirinMode;
-use sirin_shared::packet::{ByteArrayStrError, InPacket, Log, OutPacket, MAX_OUT_PACKET_SIZE};
+use sirin_shared::packet::{ByteArrayStrError, InPacket, Log, LogEntry, OutPacket, MAX_OUT_PACKET_SIZE};
 use sirin_shared::config::{CallsignBuf, NicknameBuf};
 use sirin_shared::song::magic::MagicU8;
 use sirin_shared::song::{FromSong, FromSongError, SongSize, ToSong, ToSongError};
@@ -52,7 +52,9 @@ enum Subcommands {
         mode: Option<Mode>
     },
     #[command(subcommand, about = "List and export flights")]
-    Flights(FlightSubcommands)
+    Flights(FlightSubcommands),
+    #[command(subcommand, about = "Output NMEA strings")]
+    Gps,
 }
 
 #[derive(Subcommand)]
@@ -238,7 +240,7 @@ fn run(args: Args) -> Result<(), Error> {
                             if let Log::State(state) = entry.log {
                                 writeln!(
                                     file,
-                                    "{},{},{},{},{},{},{},{},{},{},{}",
+                                    "{},{},{},{},{},{},{},{},{},{}",
                                     entry.time,
                                     state.pos.x.value,
                                     state.pos.y.value,
@@ -249,13 +251,23 @@ fn run(args: Args) -> Result<(), Error> {
                                     state.accel.x.value,
                                     state.accel.y.value,
                                     state.accel.z.value,
-                                    state.altitude.value
                                 )?;
                             }
                         }
                     }
                     println!("Done.");
                 },
+            }
+        },
+        Subcommands::Gps => {
+            let sirin = SirinDev::connect()?.open()?;
+
+            loop {
+                let Ok(OutPacket::LogEntry(LogEntry { log: Log::GpsNmea(msg), .. })) = sirin.receive_packet() else {
+                    continue;
+                };
+
+                let _ = stdout().write(&msg);
             }
         }
     }
