@@ -53,7 +53,7 @@ enum Subcommands {
     },
     #[command(subcommand, about = "List and export flights")]
     Flights(FlightSubcommands),
-    #[command(subcommand, about = "Output NMEA strings")]
+    #[command(about = "Output NMEA strings")]
     Gps,
 }
 
